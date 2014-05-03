@@ -1,0 +1,183 @@
+// get the values from A0 to A3 and D7, D8
+
+You can send whatever data you like, as long as it is all appended to a String by the name of rowdata. When you want to use a new column in the spreadsheet, simply append a comma “,” between the data in the string. In other words, you’re creating a string of CSV (comma-separated values) data. You can see this process happen from the line that has the comment:
+
+// CSV creation starts here!
+
+in the example sketch that follows shortly. Finally, you can alter the update rate of the sketch – it’s set to every 60 seconds, however you can change this by altering the 60000 (milliseconds) in the following line:
+
+const unsigned long RUN_INTERVAL_MILLIS = 60000;
+
+Don’t forget that each update costs you a call and some data from your Temboo account – you only get so many for free then you have to pay for more. Check your Temboo account for more details.
+So without further ado, the following sketch will write the values read from A0~A3, the status of D7 and D8 (1 for HIGH, 0 for LOW) along with the current date and time to the spreadsheet. Don’t forget to update the password, username and so on as you did for the first example sketch:
+
+----------------------------------------------------------------------------------------------------------
+#include <Bridge.h>
+#include <Temboo.h>
+#include "TembooAccount.h" // contains Temboo account information
+#include "Wire.h"
+#define DS3232_I2C_ADDRESS 0x68
+unsigned long analog0, analog1, analog2, analog3;
+int digital7 = 7;
+int digital8 = 8;
+boolean d7, d8;
+byte second, minute, hour, dayOfWeek, dayOfMonth, month, year; // for RTC
+const String GOOGLE_USERNAME = "your-google-username";
+const String GOOGLE_PASSWORD = "your-google-password";
+const String SPREADSHEET_TITLE = "your-spreadsheet-title";
+// update interval in milliseconds (every minute would be 60000)
+const unsigned long RUN_INTERVAL_MILLIS = 60000; 
+unsigned long lastRun = (unsigned long)-60000;
+void setup() 
+{
+// activate I2C bus
+Wire.begin(); 
+// for debugging, wait until a serial console is connected
+Serial.begin(9600);
+delay(4000);
+while(!Serial);
+Serial.print("Initializing the bridge...");
+Bridge.begin();
+Serial.println("Done");
+// Set up digital inputs to monitor
+pinMode(digital7, INPUT);
+pinMode(digital8, INPUT);
+}
+// for RTC
+// Convert normal decimal numbers to binary coded decimal
+byte decToBcd(byte val)
+{
+return ( (val/10*16) + (val%10) );
+}
+// Convert binary coded decimal to normal decimal numbers
+byte bcdToDec(byte val)
+{
+return ( (val/16*10) + (val%16) );
+}
+void readDS3232time(byte *second, 
+byte *minute, 
+byte *hour, 
+byte *dayOfWeek, 
+byte *dayOfMonth, 
+byte *month, 
+byte *year)
+{
+Wire.beginTransmission(DS3232_I2C_ADDRESS);
+Wire.write(0); // set DS3232 register pointer to 00h
+Wire.endTransmission(); 
+Wire.requestFrom(DS3232_I2C_ADDRESS, 7); // request 7 bytes of data from DS3232 starting from register 00h
+// A few of these need masks because certain bits are control bits
+*second = bcdToDec(Wire.read() & 0x7f);
+*minute = bcdToDec(Wire.read());
+*hour = bcdToDec(Wire.read() & 0x3f); // Need to change this if 12 hour am/pm
+*dayOfWeek = bcdToDec(Wire.read());
+*dayOfMonth = bcdToDec(Wire.read());
+*month = bcdToDec(Wire.read());
+*year = bcdToDec(Wire.read());
+}
+void setDS3232time(byte second, byte minute, byte hour, byte dayOfWeek, byte dayOfMonth, byte month, byte year)
+// sets time and date data to DS3232
+{
+Wire.beginTransmission(DS3232_I2C_ADDRESS); 
+Wire.write(0); // sends 00h - seconds register
+Wire.write(decToBcd(second)); // set seconds
+Wire.write(decToBcd(minute)); // set minutes
+Wire.write(decToBcd(hour)); // set hours
+Wire.write(decToBcd(dayOfWeek)); // set day of week (1=Sunday, 7=Saturday)
+Wire.write(decToBcd(dayOfMonth)); // set date (1~31)
+Wire.write(decToBcd(month)); // set month
+Wire.write(decToBcd(year)); // set year (0~99)
+Wire.endTransmission();
+}
+void loop()
+{
+// get the number of milliseconds this sketch has been running
+unsigned long now = millis();
+// run again if it's been 60 seconds since we last ran
+if (now - lastRun >= RUN_INTERVAL_MILLIS) {
+// remember 'now' as the last time we ran the choreo
+lastRun = now;
+Serial.println("Getting sensor values...");
+// get the values from A0 to A3 and D7, D8
+analog0 = analogRead(0);
+analog1 = analogRead(1);
+analog2 = analogRead(2);
+analog3 = analogRead(3);
+d7 = digitalRead(digital7);
+d8 = digitalRead(digital8);
+Serial.println("Appending value to spreadsheet...");
+// we need a Process object to send a Choreo request to Temboo
+TembooChoreo AppendRowChoreo;
+// invoke the Temboo client
+// NOTE that the client must be reinvoked and repopulated with
+// appropriate arguments each time its run() method is called.
+AppendRowChoreo.begin();
+// set Temboo account credentials
+AppendRowChoreo.setAccountName(TEMBOO_ACCOUNT);
+AppendRowChoreo.setAppKeyName(TEMBOO_APP_KEY_NAME);
+AppendRowChoreo.setAppKey(TEMBOO_APP_KEY);
+// identify the Temboo Library choreo to run (Google > Spreadsheets > AppendRow)
+AppendRowChoreo.setChoreo("/Library/Google/Spreadsheets/AppendRow");
+// your Google username (usually your email address)
+AppendRowChoreo.addInput("Username", GOOGLE_USERNAME);
+// your Google account password
+AppendRowChoreo.addInput("Password", GOOGLE_PASSWORD);
+// the title of the spreadsheet you want to append to
+AppendRowChoreo.addInput("SpreadsheetTitle", SPREADSHEET_TITLE);
+// get time and date from RTC
+readDS3232time(&second, &minute, &hour, &dayOfWeek, &dayOfMonth, &month, &year);
+// smoosh all the sensor, date and time data into a String
+// CSV creation starts here!
+String rowData(analog0);
+rowData += ",";
+rowData += analog1;
+rowData += ",";
+rowData += analog2;
+rowData += ",";
+rowData += analog3;
+rowData += ",";
+rowData += d7;
+rowData += ",";
+rowData += d8; 
+rowData += ",";
+// insert date
+rowData += dayOfMonth; 
+rowData += "/";
+rowData += month; 
+rowData += "/20";
+rowData += year; 
+rowData += ","; 
+// insert time 
+rowData += hour; 
+if (minute<10)
+{
+rowData += "0"; 
+} 
+rowData += minute; 
+rowData += "."; 
+if (second<10)
+{
+rowData += "0"; 
+} 
+rowData += second; 
+rowData += "h"; 
+// add the RowData input item
+AppendRowChoreo.addInput("RowData", rowData);
+// run the Choreo and wait for the results
+// The return code (returnCode) will indicate success or failure 
+unsigned int returnCode = AppendRowChoreo.run();
+// return code of zero (0) means success
+if (returnCode == 0) {
+Serial.println("Success! Appended " + rowData);
+Serial.println("");
+} else {
+// return code of anything other than zero means failure 
+// read and display any error messages
+while (AppendRowChoreo.available()) {
+char c = AppendRowChoreo.read();
+Serial.print(c);
+}
+}
+AppendRowChoreo.close();
+}
+}
